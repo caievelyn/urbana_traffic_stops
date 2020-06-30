@@ -1,0 +1,73 @@
+---
+title: "Urbana Traffic Stops"
+author: "Evelyn Cai"
+date: "6/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# Load libraries
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(lubridate)
+
+# Read in data
+tstopoffenses <- read_csv("urbana_traffic_stops.csv") %>%
+  clean_names() %>%
+  mutate(date_of_contact = mdy(date_of_contact))
+```
+
+## Exploratory Data Analysis
+
+```{r explore, echo=FALSE}
+glimpse(tstopoffenses)
+skim(tstopoffenses)
+```
+
+After runnning skim(), I wanted to explore why some values were missing. Some were obvious: `drug_amount_found_canine_search` was probably NA if a canine search was not involved. Others seem to be less logically missing, such as `motivation_for_stop_desc`, which has a lower complete rate compared to other variables. After exploring the data, I noticed that motivations were generally not reported before 4/30/2015.
+
+```{r missing, eval=FALSE, include=FALSE}
+# Filter for rows missing motivations and arrange by decreasing date; the largest date value is 4/30/2015. Note before we call the unique() function that there are 14,657 observations.
+tstopoffenses %>%
+  filter(is.na(motivation_for_stop_desc)) %>%
+  select(date_of_contact) %>%
+  unique() %>%
+  arrange(desc(date_of_contact))
+
+# Double check by approaching the problem in reverse: filter only for dates before 4/30/2015 (again, there are 14,657 observations). When filtering for those that have a motivation, there are only 11 - mostly traffic issues, one is community caretaking.
+tstopoffenses %>% 
+  filter(date_of_contact < "2015-04-30") %>%
+  select(motivation_for_stop_desc) %>%
+  filter(!is.na(motivation_for_stop_desc))
+```
+
+To work with the total number of traffic stops, rather than traffic stop offenses, we have to do some reshaping of the data.
+
+```{r reshaping, echo=FALSE}
+
+tstops <- tstopoffenses %>%
+  group_by(incident_number) %>%
+  # Create new variables that collapse multiple offenses into one column
+  mutate(crime_descs  = paste(crime_description, collapse =", "),
+         crime_codes = paste(crime_code, collapse = ", "),
+         crime_status_descs = paste(crime_status_description, collapse = ", "),
+         crime_categories = paste(crime_category, collapse = ", "),
+         crime_category_descs = paste(crime_category_description, collapse = ", "),
+         # Create new variable to count the number of offenses
+         number_of_crimes = length(crime_codes)) %>%
+  # Deselect duplicate columns
+  select(-crime_code, -crime_description, -crime_status_description, -crime_category, -crime_category_description) %>%
+  # Filter for unique incidents
+  unique() %>%
+  ungroup()
+
+skim(tstops)
+  
+```
+
+
+
+
