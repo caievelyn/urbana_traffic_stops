@@ -79,11 +79,25 @@ Upon fiddling with the data more, here's what I hope to put together by the end 
     
 ## Initial Analysis
 
-```{r analysis1, echo=FALSE}
+```{r cleaning, echo=FALSE}
 
-# Select only for useful demographic and logistical information
+# It seems like in 2018 "Caucasian" turned into "White" and "African American" to "Black". 
+
 tstops_demo <- tstops %>%
-  select(date_of_contact, time_of_contact, incident_number, motivation_for_stop_desc, race_description, sex_description, age_at_contact, residency_code, reason_for_stop, type_of_violation, vehicle_year, crime_descs, crime_status_descs)
+  # Select only for useful demographic and logistical information
+  select(date_of_contact, time_of_contact, incident_number,
+        motivation_for_stop_desc, race_description, sex_description,
+        age_at_contact, residency_code, reason_for_stop,
+        type_of_violation, vehicle_year, crime_descs,
+        crime_status_descs) %>%
+  # Extract year and month from date
+  mutate(year = year(date_of_contact),
+         month = month(date_of_contact),
+         # Change "Caucasian" to "White" and factorize race
+         race_description = as.factor(case_when(
+           race_description == "CAUCASIAN" ~ "WHITE",
+           race_description == "AFRICAN AMERICAN" ~ "BLACK",
+           TRUE ~ race_description)))
 
 # Use tidymodels to split data into testing and training sets
 tstops_demo_split <- initial_split(tstops_demo)
@@ -94,6 +108,15 @@ tstops_training <- tstops_demo_split %>%
 tstops_testing <- tstops_demo_split %>%
   testing()
 
+tstops_training %>%
+  group_by(race_description, year) %>%
+  mutate(race_ct = n()) %>%
+  ungroup() %>%
+  select(race_description, race_ct, year) %>%
+  unique() %>%
+  ggplot(aes(x = year, y = race_ct)) +
+  geom_line(aes(color = race_description))
+  
 
 ```
 
