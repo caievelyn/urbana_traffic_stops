@@ -83,7 +83,16 @@ Upon fiddling with the data more, here's what I hope to put together by the end 
 
 # Select only for useful demographic and logistical information
 tstops_demo <- tstops %>%
-  select(date_of_contact, time_of_contact, incident_number, motivation_for_stop_desc, race_description, sex_description, age_at_contact, residency_code, reason_for_stop, type_of_violation, vehicle_year, crime_descs)
+  select(date_of_contact, time_of_contact, incident_number, motivation_for_stop_desc, race_description, sex_description, age_at_contact, residency_code, reason_for_stop, type_of_violation, vehicle_year, crime_descs, crime_status_descs)
+
+# Use tidymodels to split data into testing and training sets
+tstops_demo_split <- initial_split(tstops_demo)
+
+tstops_training <- tstops_demo_split %>%
+  training()
+
+tstops_testing <- tstops_demo_split %>%
+  testing()
 
 
 ```
