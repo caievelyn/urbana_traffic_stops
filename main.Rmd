@@ -13,6 +13,7 @@ library(tidyverse)
 library(janitor)
 library(skimr)
 library(lubridate)
+library(tidymodels)
 
 # Read in data
 tstopoffenses <- read_csv("urbana_traffic_stops.csv") %>%
@@ -22,8 +23,7 @@ tstopoffenses <- read_csv("urbana_traffic_stops.csv") %>%
 
 ## Exploratory Data Analysis
 
-```{r explore, echo=FALSE}
-glimpse(tstopoffenses)
+```{r explore, eval=FALSE}
 skim(tstopoffenses)
 ```
 
@@ -66,6 +66,26 @@ tstops <- tstopoffenses %>%
 
 skim(tstops)
   
+```
+
+Upon fiddling with the data more, here's what I hope to put together by the end of the project:
+* An imputed data set that accounts for missing values of key variables, specifically `age_at_contact`
+* Interaction plots and parallel slopes models
+* Regressions using `tidymodels` for training and testing sets, as well as which variables are the most useful
+* Easily digestible plots that show:
+    + Likelihood of being stopped (baseline) compared to likelihood of being stopped if you are a minority, a woman, other interesting subgroup comparisons
+    + Outcome likelihoods after being stopped compared to a baseline (either group average or being white/male)
+    + Impact of location and time of day on the stop
+    
+## Initial Analysis
+
+```{r analysis1, echo=FALSE}
+
+# Select only for useful demographic and logistical information
+tstops_demo <- tstops %>%
+  select(date_of_contact, time_of_contact, incident_number, motivation_for_stop_desc, race_description, sex_description, age_at_contact, residency_code, reason_for_stop, type_of_violation, vehicle_year, crime_descs)
+
+
 ```
 
 
