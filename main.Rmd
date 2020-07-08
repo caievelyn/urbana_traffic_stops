@@ -14,11 +14,25 @@ library(janitor)
 library(skimr)
 library(lubridate)
 library(tidymodels)
+library(readxl)
 
 # Read in data
-tstopoffenses <- read_csv("urbana_traffic_stops.csv") %>%
+df <- read_csv("urbana_traffic_stops.csv") %>%
   clean_names() %>%
   mutate(date_of_contact = mdy(date_of_contact))
+
+# Additional ages
+ages <- read_xlsx("Additional IDOT info.xlsx") %>%
+  clean_names() %>%
+  rename("incident_number" = "incident") %>%
+  select(incident_number, age_at_contact) %>%
+  unique()
+
+# Join for ages
+tstopoffenses <- left_join(df, ages, by = "incident_number") %>%
+  rename("age_at_contact" = "age_at_contact.y") %>%
+  select(-age_at_contact.x) %>%
+  unique()
 ```
 
 ## Exploratory Data Analysis
@@ -98,6 +112,7 @@ tstops_demo <- tstops %>%
            race_description == "CAUCASIAN" ~ "WHITE",
            race_description == "AFRICAN AMERICAN" ~ "BLACK",
            TRUE ~ race_description)))
+
 
 # Use tidymodels to split data into testing and training sets
 tstops_demo_split <- initial_split(tstops_demo)
