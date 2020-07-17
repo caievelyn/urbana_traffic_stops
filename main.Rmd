@@ -15,6 +15,7 @@ library(skimr)
 library(lubridate)
 library(tidymodels)
 library(readxl)
+library(patchwork)
 
 # Read in data
 df <- read_csv("urbana_traffic_stops.csv") %>%
@@ -78,22 +79,20 @@ tstops <- tstopoffenses %>%
   unique() %>%
   ungroup()
 
-skim(tstops)
+# skim(tstops)
   
 ```
 
 Upon fiddling with the data more, here's what I hope to put together by the end of the project:
-* An imputed data set that accounts for missing values of key variables, specifically `age_at_contact`
-* Interaction plots and parallel slopes models
-* Regressions using `tidymodels` for training and testing sets, as well as which variables are the most useful
+* Interaction plots and parallel slopes models for variables such as: disparity ratio, stops & resultant arrest %s, and % contraband found out of consent searches
 * Easily digestible plots that show:
-    + Likelihood of being stopped (baseline) compared to likelihood of being stopped if you are a minority, a woman, other interesting subgroup comparisons
+    + Breakdown of interacting variables
     + Outcome likelihoods after being stopped compared to a baseline (either group average or being white/male)
-    + Impact of location and time of day on the stop
+    + Impact of location (?) and time of day on the stop
     
 ## Initial Analysis
 
-```{r cleaning, echo=FALSE}
+```{r cleaning, echo=FALSE, fig.width = 10}
 
 # It seems like in 2018 "Caucasian" turned into "White" and "African American" to "Black". 
 
@@ -111,9 +110,104 @@ tstops_demo <- tstops %>%
          race_description = as.factor(case_when(
            race_description == "CAUCASIAN" ~ "WHITE",
            race_description == "AFRICAN AMERICAN" ~ "BLACK",
-           TRUE ~ race_description)))
+           TRUE ~ race_description))) %>%
+  unique()
+
+race_by_year_unique <- tstops_demo %>%
+  group_by(race_description, year) %>%
+  mutate(race_ct = n()) %>%
+  ungroup() %>%
+  select(race_description, race_ct, year) %>%
+  unique()
+
+## Todo: Clean up x labels on race_by_year1 and have years increase by 1; remove x labels for second graph
+
+race_by_year1 <- race_by_year_unique %>%
+  ggplot(aes(x = year, y = race_ct ,fill = race_description)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(fill = "Race",
+       title = "Number of stops by race per year",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  xlab("Year") +
+  ylab("Number of Stops")
+  
+race_by_year2 <- race_by_year_unique %>%
+  ggplot(aes(x = year, y = race_ct ,fill = race_description)) +
+  geom_col() +
+  labs(fill = "Race",
+       title = "Number of stops by race per year",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  xlab("Year") +
+  ylab("Number of Stops") +
+  facet_grid(~race_description)
+
+race_by_year1 + race_by_year2
+  
+
+```
+
+## Disparity Ratio Calculations for 2019 and 2020
+
+```{r disparity-ratios, echo=FALSE}
+## First to include 2019 and 2020
+disparity_ratios <- tstops_demo %>%
+  filter(year %in% c("2018", "2019", "2020")) %>%
+  group_by(year) %>%
+  mutate(all = n()) %>%
+  ungroup() %>%
+  group_by(year, race_description) %>%
+  mutate(race_ct = n(),
+         race_percentage = 100 * race_ct / all,
+         disparity_ratio = case_when(
+           race_description == "AMERICAN INDIAN/ALASKAN" ~ race_percentage / 0.24,
+           race_description == "ASIAN" ~ race_percentage / 8.37,
+           race_description == "BLACK" ~ race_percentage / 22.26,
+           race_description == "HISPANIC" ~ race_percentage / 4.84,
+           race_description == "WHITE" ~ race_percentage / 62.23)) %>%
+  ungroup() %>%
+  select(year, race_description, disparity_ratio) %>%
+  unique()
+
+# Graph disparity ratios
+disparity_ratios %>%
+  ggplot(aes(year, disparity_ratio, color = race_description)) +
+  geom_line() +
+  scale_x_continuous(breaks = c(2018, 2019, 2020))
+
+# Gender
+disparity_ratios_gender <- tstops_demo %>%
+  filter(year %in% c("2018", "2019", "2020")) %>%
+  group_by(year) %>%
+  mutate(all = n()) %>%
+  ungroup() %>%
+  group_by(year, race_description, sex_description) %>%
+  mutate(race_ct = n(),
+         race_percentage = 100 * race_ct / all,
+         disparity_ratio = case_when(
+           race_description == "AMERICAN INDIAN/ALASKAN" ~ race_percentage / 0.24,
+           race_description == "ASIAN" ~ race_percentage / 8.37,
+           race_description == "BLACK" ~ race_percentage / 22.26,
+           race_description == "HISPANIC" ~ race_percentage / 4.84,
+           race_description == "WHITE" ~ race_percentage / 62.23)) %>%
+  ungroup() %>%
+  select(year, race_description, disparity_ratio, sex_description) %>%
+  unique()
+
+disparity_ratios_gender %>%
+  ggplot(aes(year, disparity_ratio, color = race_description)) +
+  geom_line() +
+  scale_x_continuous(breaks = c(2018, 2019, 2020)) +
+  facet_grid(~sex_description)
+
+```
 
 
+
+```{r tidymodels, echo=FALSE}
 # Use tidymodels to split data into testing and training sets
 tstops_demo_split <- initial_split(tstops_demo)
 
@@ -123,18 +217,9 @@ tstops_training <- tstops_demo_split %>%
 tstops_testing <- tstops_demo_split %>%
   testing()
 
-tstops_training %>%
-  group_by(race_description, year) %>%
-  mutate(race_ct = n()) %>%
-  ungroup() %>%
-  select(race_description, race_ct, year) %>%
-  unique() %>%
-  ggplot(aes(x = year, y = race_ct)) +
-  geom_line(aes(color = race_description))
-  
 
 ```
 
 
-
-
+## Questions for Melissa
+1. My numbers are off, what could be the case? The biggest disparity is 2018, everything else is 1 or 2 stops off
