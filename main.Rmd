@@ -61,7 +61,7 @@ tstopoffenses %>%
 
 To work with the total number of traffic stops, rather than traffic stop offenses, we have to do some reshaping of the data.
 
-```{r reshaping, echo=FALSE}
+```{r reshaping, echo=FALSE, eval=FALSE}
 
 tstops <- tstopoffenses %>%
   group_by(incident_number) %>%
@@ -96,13 +96,12 @@ Upon fiddling with the data more, here's what I hope to put together by the end 
 
 # It seems like in 2018 "Caucasian" turned into "White" and "African American" to "Black". 
 
-tstops_demo <- tstops %>%
+tstops_demo <- tstopoffenses %>%
   # Select only for useful demographic and logistical information
   select(date_of_contact, time_of_contact, incident_number,
         motivation_for_stop_desc, race_description, sex_description,
         age_at_contact, residency_code, reason_for_stop,
-        type_of_violation, vehicle_year, crime_descs,
-        crime_status_descs) %>%
+        type_of_violation, vehicle_year, crime_description, crime_status_description, crime_category_description) %>%
   # Extract year and month from date
   mutate(year = year(date_of_contact),
          month = month(date_of_contact),
@@ -231,7 +230,7 @@ disparity_ratios %>%
 
 ```
 
-
+## Motivations
 
 ```{r tidymodels, echo=FALSE}
 # Use tidymodels to split data into testing and training sets
@@ -242,6 +241,17 @@ tstops_training <- tstops_demo_split %>%
 
 tstops_testing <- tstops_demo_split %>%
   testing()
+
+# Fit regression model to likelihood of being arrested based off of race, age, gender
+
+# Construct simulation that demonstrates the likelihood of being stopped vs not being stopped:
+# 1s correspond to everyone in the dataset who was stopped (by incident number)
+# 0s correspond to everyone else of drivable age?
+
+```
+
+## Durations
+```{r duration, echo=FALSE}
 
 
 ```
