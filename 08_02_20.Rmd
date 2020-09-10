@@ -1,0 +1,454 @@
+---
+title: "08_02_2020"
+author: "Evelyn Cai"
+date: "8/2/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+# Load libraries
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(lubridate)
+library(tidymodels)
+library(readxl)
+library(patchwork)
+library(ggridges)
+
+# Read in data and clean names/columns
+df <- read_csv("urbana_traffic_stops.csv",
+               col_types= cols(
+                 `AGE AT CONTACT` = col_character())) %>%
+  clean_names() %>%
+  mutate(date_of_contact = mdy(date_of_contact),
+         age_at_contact = case_when(age_at_contact == "NN" ~ NA_character_,
+                                    TRUE ~ age_at_contact),
+         age_at_contact = as.numeric(age_at_contact))
+
+# Read in duration CSV
+durations <- read_xlsx("Stop Duration thru 2017.xlsx") %>%
+  clean_names()
+
+# Read in accident data
+accidents <- read_xlsx("Drivers in Accidents - Benchmarks.xlsx")
+```
+
+```{r ages_deprecated, eval=FALSE, echo=FALSE}
+# Below, I explored the differences in the two datasets, since joining seems to yield some extra data points. It seems there are 130 incident numbers in `ages` that is not in `df` and 1558 incident numbers in `df` that is not in `ages`. Therefore, I will choose to ignore the age piece right now.
+# only_ins <- df %>% select(incident_number) %>% unique()
+# only_age_ins <- ages %>% select(incident_number) %>% unique()
+# anti_join(only_age_ins, only_ins)
+
+# Read in additional ages
+ages <- read_xlsx("Additional IDOT info.xlsx") %>%
+  clean_names() %>%
+  rename("incident_number" = "incident") %>%
+  select(incident_number, age_at_contact) %>%
+  unique()
+
+# Join for ages
+tstops <- left_join(df, ages, by = "incident_number") %>%
+  rename("age_at_contact" = "age_at_contact.y") %>%
+  mutate(age_at_contact = case_when(is.na(age_at_contact.x) ~ age_at_contact,
+                                    TRUE ~ age_at_contact.x)) %>%
+  select(-age_at_contact.x)
+
+
+# Below, I explored the differences in the two datasets, since joining seems to yield some extra data points. It seems there are 130 incident numbers in `ages` that is not in `df` and 1558 incident numbers in `df` that is not in `ages`. Therefore, I will choose to ignore the age piece right now.
+
+ only_ins <- df %>% select(incident_number) %>% unique()
+ only_age_ins <- ages %>% select(incident_number) %>% unique()
+ anti_join(only_age_ins, only_ins)
+
+```
+
+```{r cleaning_df, echo=FALSE}
+tstops <- df %>%
+  group_by(incident_number) %>%
+  # Create new variables that collapse multiple offenses into one column
+  mutate(crime_descs  = paste(crime_description, collapse =", "),
+         crime_codes = paste(crime_code, collapse = ", "),
+         crime_status_descs = paste(crime_status_description, collapse = ", "),
+         crime_categories = paste(crime_category, collapse = ", "),
+         crime_category_descs = paste(crime_category_description, collapse = ", "),
+         # Create new variable to count the number of offenses
+         number_of_crimes = length(crime_codes)) %>%
+  # ungroup
+  ungroup() %>%
+  # Deselect duplicate columns
+  select(-crime_code, -crime_description, -crime_status_description, -crime_category, -crime_category_description) %>%
+  # Filter for unique incidents
+  unique()
+
+## Create a new dataset that contains demographic information
+
+tstops_demo <- tstops %>%
+  # Select only for useful demographic and logistical information
+  select(date_of_contact, time_of_contact, incident_number,
+        motivation_for_stop_desc, race_description, sex_description,
+        age_at_contact, residency_code, reason_for_stop,
+        type_of_violation, vehicle_year, crime_descs, crime_status_descs, crime_category_descs) %>%
+  # Extract year and month from date
+  mutate(year = year(date_of_contact),
+         month = month(date_of_contact),
+         # Change "Caucasian" to "White" and factorize race
+         race_description = as.factor(case_when(
+           race_description == "CAUCASIAN" ~ "WHITE",
+           race_description == "AFRICAN AMERICAN" ~ "BLACK",
+           TRUE ~ race_description)))
+```
+
+```{r echo=FALSE, fig.height=6, fig.width=10}
+# Graphing race by year
+
+race_by_year_unique <- tstops_demo %>%
+  group_by(race_description, year) %>%
+  mutate(race_ct = n()) %>%
+  ungroup() %>%
+  select(race_description, race_ct, year) %>%
+  unique()
+
+## Todo: Clean up x labels on race_by_year1 and have years increase by 1; remove x labels for second graph
+
+race_by_year1 <- race_by_year_unique %>%
+  ggplot(aes(x = year, y = race_ct ,fill = race_description)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(fill = "Race",
+       title = "Number of stops by race per year",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  scale_fill_brewer(palette = "PRGn") +
+  xlab("Year") +
+  ylab("Number of Stops") +
+  scale_x_continuous(breaks = c(2012, 2013, 2014, 2015, 2016,2017, 2018, 2019, 2020))
+  
+race_by_year2 <- race_by_year_unique %>%
+  ggplot(aes(x = year, y = race_ct ,fill = race_description)) +
+  geom_col() +
+  labs(fill = "Race",
+       title = "Number of stops by race per year",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        axis.text.x = element_blank()) +
+  scale_fill_brewer(palette = "PRGn") +
+  xlab("Year") +
+  ylab("Number of Stops") +
+  facet_grid(~race_description)
+
+# Graph
+
+race_by_year1 + race_by_year2
+
+```
+
+## Disparity Ratio Calculations
+
+```{r disparity-ratios, fig.height=3, fig.width=8}
+disparity_ratios <- tstops_demo %>%
+  filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN")) %>%
+  group_by(year) %>%
+  mutate(all = n()) %>%
+  ungroup() %>%
+  group_by(year, race_description) %>%
+  mutate(race_ct = n(),
+         race_percentage = 100 * race_ct / all,
+         disparity_ratio = case_when(
+           year >= 2018 & race_description == "ASIAN" ~ race_percentage / 8.37,
+           year >= 2018 & race_description == "BLACK" ~ race_percentage / 22.26,
+           year >= 2018 & race_description == "HISPANIC" ~ race_percentage / 4.84,
+           year >= 2018 & race_description == "WHITE" ~ race_percentage / 62.23,
+           year == 2017 & race_description == "ASIAN" ~ race_percentage / 9.07,
+           year == 2017 & race_description == "BLACK" ~ race_percentage / 20.36,
+           year == 2017 & race_description == "HISPANIC" ~ race_percentage / 4.4,
+           year == 2017 & race_description == "WHITE" ~ race_percentage / 63.7,
+           year == 2016 & race_description == "ASIAN" ~ race_percentage / 9.91,
+           year == 2016 & race_description == "BLACK" ~ race_percentage / 18.56,
+           year == 2016 & race_description == "HISPANIC" ~ race_percentage / 4.04,
+           year == 2016 & race_description == "WHITE" ~ race_percentage / 65.54,
+           year <= 2015 & race_description == "ASIAN" ~ race_percentage / 9.96,
+           year <= 2015 & race_description == "BLACK" ~ race_percentage / 18.07,
+           year <= 2015 & race_description == "HISPANIC" ~ race_percentage / 3.52,
+           year <= 2015 & race_description == "WHITE" ~ race_percentage / 67.26)) %>%
+  ungroup() %>%
+  group_by(year, race_description, sex_description) %>%
+  mutate(race_gender_ct = n(),
+         race_gender_percentage = 100 * race_gender_ct / all,
+         disparity_ratio_gender = case_when(
+           year >= 2018 & race_description == "ASIAN" ~ race_gender_percentage / 8.37,
+           year >= 2018 & race_description == "BLACK" ~ race_gender_percentage / 22.26,
+           year >= 2018 & race_description == "HISPANIC" ~ race_gender_percentage / 4.84,
+           year >= 2018 & race_description == "WHITE" ~ race_gender_percentage / 62.23,
+           year == 2017 & race_description == "ASIAN" ~ race_gender_percentage / 9.07,
+           year == 2017 & race_description == "BLACK" ~ race_gender_percentage / 20.36,
+           year == 2017 & race_description == "HISPANIC" ~ race_gender_percentage / 4.4,
+           year == 2017 & race_description == "WHITE" ~ race_gender_percentage / 63.7,
+           year == 2016 & race_description == "ASIAN" ~ race_gender_percentage / 9.91,
+           year == 2016 & race_description == "BLACK" ~ race_gender_percentage / 18.56,
+           year == 2016 & race_description == "HISPANIC" ~ race_gender_percentage / 4.04,
+           year == 2016 & race_description == "WHITE" ~ race_gender_percentage / 65.54,
+           year <= 2015 & race_description == "ASIAN" ~ race_gender_percentage / 9.96,
+           year <= 2015 & race_description == "BLACK" ~ race_gender_percentage / 18.07,
+           year <= 2015 & race_description == "HISPANIC" ~ race_gender_percentage / 3.52,
+           year <= 2015 & race_description == "WHITE" ~ race_gender_percentage / 67.26)) %>%
+  ungroup() %>%
+  select(year, race_description, disparity_ratio, disparity_ratio_gender, sex_description, race_percentage) %>%
+  unique()
+
+## Only 2012 is off compared to the 2018 report, so I omitted it
+
+# Graph disparity ratios
+disparity_ratios %>%
+  ggplot(aes(year, disparity_ratio, color = race_description)) +
+  geom_line() +
+  scale_x_continuous(breaks = c(2013, 2014, 2015, 2016,2017, 2018, 2019, 2020)) +
+  scale_y_continuous(breaks = seq(0, 2.5, by = 0.5)) +
+  theme_minimal() +
+  labs(title = "Disparity Ratios",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  scale_color_brewer(palette = "Dark2") +
+  xlab("Year") +
+  ylab("Disparity Ratio") +
+  geom_hline(yintercept = 1, color = "red")
+```
+
+```{r fig.height=4.5, fig.width=8}
+# Graph disparity ratios by gender
+disparity_ratios %>%
+  ggplot(aes(year, disparity_ratio_gender, color = sex_description)) +
+  geom_line() +
+  scale_x_continuous(breaks = c(2013, 2014, 2015, 2016,2017, 2018, 2019, 2020)) +
+  scale_y_continuous(breaks = seq(0, 2.5, by = 0.5)) +
+  theme_minimal() +
+  labs(title = "Disparity Ratios by Gender",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  geom_hline(yintercept = 0.5, color = "red") +
+  facet_wrap(~race_description)
+
+## To do gender*race disparity ratios: We'd need to either 1. Account for the different frequencies in male vs females being stopped, or 2. Find out the average # males and females stopped in Urbana to use as a "checkpoint" or baseline. The above chart displays disparity ratios by gender, which assumes that there are an equal number of men and women driving on the streets.
+```
+
+```{r time_of_contact, fig.width = 10, fig.height=6}
+tstops_demo %>%
+  filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN")) %>%
+  mutate(time_hours = as.numeric(time_of_contact, units = "secs"),
+         time_hours = time_hours/3600,
+         time_of_day = factor(case_when(time_hours >= 0 & time_hours <= 6 ~ "Midnight to 6am",
+                                 time_hours > 6 & time_hours <= 12 ~ "6am to noon",
+                                 time_hours > 12 & time_hours <= 18 ~ "Noon to 6pm",
+                                 time_hours > 18 & time_hours <= 24 ~ "6pm to Midnight",
+                                 TRUE ~ NA_character_),
+                              levels = c("Midnight to 6am", "6am to noon", "Noon to 6pm", "6pm to Midnight"))) %>%
+  group_by(year) %>%
+  mutate(all = n()) %>%
+  ungroup() %>%
+  group_by(year, race_description, time_of_day) %>%
+  mutate(race_time_ct = n(),
+         race_time_percentage = 100 * race_time_ct / all,
+         disparity_ratio_time = case_when(
+           year >= 2018 & race_description == "ASIAN" ~ race_time_percentage / 8.37,
+           year >= 2018 & race_description == "BLACK" ~ race_time_percentage / 22.26,
+           year >= 2018 & race_description == "HISPANIC" ~ race_time_percentage / 4.84,
+           year >= 2018 & race_description == "WHITE" ~ race_time_percentage / 62.23,
+           year == 2017 & race_description == "ASIAN" ~ race_time_percentage / 9.07,
+           year == 2017 & race_description == "BLACK" ~ race_time_percentage / 20.36,
+           year == 2017 & race_description == "HISPANIC" ~ race_time_percentage / 4.4,
+           year == 2017 & race_description == "WHITE" ~ race_time_percentage / 63.7,
+           year == 2016 & race_description == "ASIAN" ~ race_time_percentage / 9.91,
+           year == 2016 & race_description == "BLACK" ~ race_time_percentage / 18.56,
+           year == 2016 & race_description == "HISPANIC" ~ race_time_percentage / 4.04,
+           year == 2016 & race_description == "WHITE" ~ race_time_percentage / 65.54,
+           year <= 2015 & race_description == "ASIAN" ~ race_time_percentage / 9.96,
+           year <= 2015 & race_description == "BLACK" ~ race_time_percentage / 18.07,
+           year <= 2015 & race_description == "HISPANIC" ~ race_time_percentage / 3.52,
+           year <= 2015 & race_description == "WHITE" ~ race_time_percentage / 67.26)) %>%
+  ungroup() %>%
+  select(year, race_description, disparity_ratio_time, sex_description, race_time_percentage, time_of_day) %>%
+  unique() %>%
+  ggplot(aes(year, disparity_ratio_time, color = time_of_day)) +
+  geom_line() +
+  scale_x_continuous(breaks = c(2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020)) +
+  scale_y_continuous(breaks = seq(0, 2.5, by = 0.5)) +
+  theme_minimal() +
+  labs(title = "Disparity Ratios by Time of Day",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  facet_wrap(~race_description)
+
+## Do it again to follow sunrise/sunset
+
+tstops_demo %>%
+  filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN")) %>%
+  mutate(time_hours = as.numeric(time_of_contact, units = "secs"),
+         time_hours = time_hours/3600,
+         time_of_day = factor(case_when(time_hours >= 0 & time_hours <= 7 ~ "Night",
+                                        time_hours >= 7 & time_hours <= 20 ~ "Day",
+                                        time_hours >= 20 ~ "Night",
+                                        TRUE ~ NA_character_),
+                              levels = c("Day", "Night"))) %>%
+  group_by(year) %>%
+  mutate(all = n()) %>%
+  ungroup() %>%
+  group_by(year, race_description, time_of_day) %>%
+  mutate(race_time_ct = n(),
+         race_time_percentage = 100 * race_time_ct / all,
+         disparity_ratio_time = case_when(
+           year >= 2018 & race_description == "ASIAN" ~ race_time_percentage / 8.37,
+           year >= 2018 & race_description == "BLACK" ~ race_time_percentage / 22.26,
+           year >= 2018 & race_description == "HISPANIC" ~ race_time_percentage / 4.84,
+           year >= 2018 & race_description == "WHITE" ~ race_time_percentage / 62.23,
+           year == 2017 & race_description == "ASIAN" ~ race_time_percentage / 9.07,
+           year == 2017 & race_description == "BLACK" ~ race_time_percentage / 20.36,
+           year == 2017 & race_description == "HISPANIC" ~ race_time_percentage / 4.4,
+           year == 2017 & race_description == "WHITE" ~ race_time_percentage / 63.7,
+           year == 2016 & race_description == "ASIAN" ~ race_time_percentage / 9.91,
+           year == 2016 & race_description == "BLACK" ~ race_time_percentage / 18.56,
+           year == 2016 & race_description == "HISPANIC" ~ race_time_percentage / 4.04,
+           year == 2016 & race_description == "WHITE" ~ race_time_percentage / 65.54,
+           year <= 2015 & race_description == "ASIAN" ~ race_time_percentage / 9.96,
+           year <= 2015 & race_description == "BLACK" ~ race_time_percentage / 18.07,
+           year <= 2015 & race_description == "HISPANIC" ~ race_time_percentage / 3.52,
+           year <= 2015 & race_description == "WHITE" ~ race_time_percentage / 67.26)) %>%
+  ungroup() %>%
+  select(year, race_description, disparity_ratio_time, sex_description, race_time_percentage, time_of_day) %>%
+  unique() %>%
+  ggplot(aes(year, disparity_ratio_time, color = time_of_day)) +
+  geom_line() +
+  scale_x_continuous(breaks = c(2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020)) +
+  scale_y_continuous(breaks = seq(0, 2.5, by = 0.5)) +
+  theme_minimal() +
+  labs(title = "Disparity Ratios by Time of Day (Day and Night)",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  facet_wrap(~race_description)
+```
+
+
+```{r age, fig.height=8, fig.width=10, message=FALSE, warning=FALSE}
+
+# Age distribution of drivers in 2018, 2019, and 2020
+
+tstops_demo %>%
+  filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
+         !is.na(age_at_contact)) %>%
+  ggplot(aes(x = age_at_contact, y = race_description)) +
+  geom_density_ridges(show.legend = FALSE) +
+  facet_wrap(~year) +
+  labs(title = "Age Distribution of Drivers by Race",
+       caption = "Data Publicly Available from the Urbana Police Department",
+       xlab = "Age at Contact") +
+  ylab(NULL)
+```
+
+```{r duration, echo=FALSE, fig.height=8, fig.width=10}
+
+# Join duration data with tstop demographic information
+duration_join <- left_join(tstops_demo, durations, by = "incident_number")
+
+duration_join %>%
+  filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
+         !is.na(duration_of_stop)) %>%
+  group_by(year, race_description) %>%
+  mutate(avg_duration = mean(duration_of_stop)) %>%
+  ungroup() %>%
+  ggplot(aes(x = year, y = avg_duration, color = race_description)) +
+  geom_line()
+```
+
+As you can see from the graph above, average durations are higher for all POC groups than white folks. Hispanic folks are stopped the most on average, but let's view a boxplot to account for extremes.
+
+```{r echo=FALSE, fig.height=8, fig.width=10}
+duration_join %>%
+  filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
+         !is.na(duration_of_stop)) %>%
+  ggplot(aes(x = race_description, y = duration_of_stop)) +
+  geom_boxplot() +
+  facet_wrap(~year)
+
+```
+
+```{r echo=FALSE, fig.height=8, fig.width=10}
+accidents <- accidents %>%
+  mutate(year = year(Date)) %>%
+  filter(!is.na(Age))
+
+# Plot of age distribution
+vertical <- accidents %>%
+  filter(Race %in% c("W", "H", "A", "B")) %>%
+  summarize(vertical = mean(Age))
+
+vertical <- as.numeric(vertical)
+
+accidents %>%
+  filter(Race %in% c("W", "H", "A", "B")) %>%
+  ggplot(aes(x = Age, y = Race)) +
+  geom_density_ridges(show.legend = FALSE) +
+  scale_y_discrete(labels = rev(c("White", "Hispanic", "Black", "Asian"))) +
+  scale_x_continuous(breaks = seq(0, 100, by = 10)) +
+  geom_vline(xintercept = vertical) +
+  labs(title = "Age Distribution of Drivers Involved in Accidents",
+       subtitle = "Mean age is about 39 years old")
+
+# Plotting age distribution by at fault
+accidents %>%
+  filter(Race %in% c("W", "H", "A", "B")) %>%
+  ggplot(aes(x = Age, y = Race)) +
+  geom_density_ridges(show.legend = FALSE) +
+  facet_wrap(~`At Fault`) +
+  scale_y_discrete(labels = rev(c("White", "Hispanic", "Black", "Asian"))) +
+  scale_x_continuous(breaks = seq(0, 100, by = 10)) +
+  labs(title = "Age Distribution of Drivers Involved in Accidents",
+       subtitle = "Faceted by whether the driver was at fault or not")
+
+accidents %>%
+  filter(Race %in% c("W", "H", "A", "B"),
+         year >= 2014) %>%
+  group_by(year, `At Fault`, Race) %>%
+  mutate(mean_age = mean(Age)) %>%
+  select(year, `At Fault`, Race, mean_age) %>%
+  unique() %>%
+  ggplot(aes(year, mean_age, color = Race)) +
+  geom_line() +
+  scale_x_continuous(breaks = c(2014, 2015, 2016, 2017, 2018, 2019)) +
+  scale_y_continuous(breaks = seq(0, 80, by = 40)) +
+  theme_minimal() +
+  labs(title = "Mean Age of Drivers Involved in Accidents by Race",
+       caption = "Faceted by whether the driver was at fault or not") +
+  facet_wrap(~`At Fault`)
+
+# Some proportion tables
+## How many people are at fault of each race / gender group per year
+accidents %>%
+  filter(Race %in% c("W", "H", "A", "B")) %>%
+  group_by(year, Race, Sex) %>%
+  mutate(all = n()) %>%
+  ungroup() %>%
+  group_by(year, Race, Sex, `At Fault`) %>%
+  mutate(at_fault = n(),
+         prop_at_fault = at_fault / all) %>%
+  ungroup() %>%
+  select(Race,Sex, `At Fault`, year, prop_at_fault) %>%
+  unique()
+```
+
+# Things I want to do:
+
+* Interaction plots and parallel slopes models for variables such as:
+    + stops & resultant arrest %s
+    + duration & demographic variables
+    + % more serious than traffic violations out of all stopped
+    + Impact of location (?) and time of day on the stop
+    + Interaction on time of day
+    
+# Questions
+
+* Which variable reveals the outcome of the stop, and which outcomes are considered "more serious than traffic violations"? (Is it crime category description: traffic offenses?)
+* Which variable, and which levels of that variable, reveal an arrest outcome for traffic stops?
+* Where can I get the duration of each traffic stop?
+* What are meaningful time segmentations? (morning/night, light/dark, rush hour/ non, etc)
+* Anything you want to be looked at?
+
+
+    

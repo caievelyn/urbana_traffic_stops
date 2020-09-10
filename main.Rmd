@@ -34,6 +34,12 @@ tstopoffenses <- left_join(df, ages, by = "incident_number") %>%
   rename("age_at_contact" = "age_at_contact.y") %>%
   select(-age_at_contact.x) %>%
   unique()
+
+x <- left_join(df, ages, by = "incident_number") %>%
+  rename("age_at_contact" = "age_at_contact.y") %>%
+  mutate(age_at_contact_new = case_when(is.na(age_at_contact.x) ~ age_at_contact,
+                                    is.na(age_at_contact) ~ NA_real_,
+                                    TRUE ~ age_at_contact.x))
 ```
 
 ## Exploratory Data Analysis
@@ -155,7 +161,7 @@ race_by_year1 + race_by_year2
 
 From the graphs above, you can see general trends in which traffic stops lowered by total volume around 2017, only to increase again in recent years.
 
-## Disparity Ratio Calculations for 2019 and 2020
+## Disparity Ratio Calculations
 
 ```{r disparity-ratios, echo=FALSE}
 ## First to include 2019 and 2020
