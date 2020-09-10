@@ -1,7 +1,7 @@
 ---
-title: "08_02_2020"
+title: "Civitas Meeting"
 author: "Evelyn Cai"
-date: "8/2/2020"
+date: "9/10/2020"
 output: html_document
 ---
 
@@ -17,6 +17,7 @@ library(tidymodels)
 library(readxl)
 library(patchwork)
 library(ggridges)
+library(rstanarm)
 
 # Read in data and clean names/columns
 df <- read_csv("urbana_traffic_stops.csv",
@@ -213,7 +214,7 @@ disparity_ratios %>%
   scale_color_brewer(palette = "Dark2") +
   xlab("Year") +
   ylab("Disparity Ratio") +
-  geom_hline(yintercept = 1, color = "red")
+  geom_hline(yintercept = 1, color = "grey")
 ```
 
 ```{r fig.height=4.5, fig.width=8}
@@ -226,7 +227,7 @@ disparity_ratios %>%
   theme_minimal() +
   labs(title = "Disparity Ratios by Gender",
        caption = "Data Publicly Available from Urbana Police Department") +
-  geom_hline(yintercept = 0.5, color = "red") +
+  geom_hline(yintercept = 0.5, color = "grey") +
   facet_wrap(~race_description)
 
 ## To do gender*race disparity ratios: We'd need to either 1. Account for the different frequencies in male vs females being stopped, or 2. Find out the average # males and females stopped in Urbana to use as a "checkpoint" or baseline. The above chart displays disparity ratios by gender, which assumes that there are an equal number of men and women driving on the streets.
@@ -342,34 +343,48 @@ tstops_demo %>%
   ylab(NULL)
 ```
 
-```{r duration, echo=FALSE, fig.height=8, fig.width=10}
+```{r duration, echo=FALSE, fig.height=4, fig.width=5}
 
 # Join duration data with tstop demographic information
-duration_join <- left_join(tstops_demo, durations, by = "incident_number")
-
-duration_join %>%
+duration_join <- left_join(tstops_demo, durations, by = "incident_number") %>%
   filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
          !is.na(duration_of_stop)) %>%
   group_by(year, race_description) %>%
   mutate(avg_duration = mean(duration_of_stop)) %>%
   ungroup() %>%
-  ggplot(aes(x = year, y = avg_duration, color = race_description)) +
-  geom_line()
+  mutate(race_description = fct_relevel(race_description, c("WHITE", "ASIAN", "BLACK", "HISPANIC")))
+
+# Create barplot
+duration_by_year <- duration_join %>%
+  ggplot(aes(x = year, y = avg_duration ,fill = race_description)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(fill = "Race",
+       title = "Average Duration of Stops by Race",
+       subtitle = "Urbana, IL 2012-2017",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  scale_fill_brewer(palette = "PRGn") +
+  xlab(NULL) +
+  ylab("Duration in minutes")
+
+duration_by_year
 ```
 
-As you can see from the graph above, average durations are higher for all POC groups than white folks. Hispanic folks are stopped the most on average, but let's view a boxplot to account for extremes.
+As you can see from the graph above, average durations are higher for all POC groups than white folks. Over time, average duration seems to have decreased. However, Black and Hispanic drivers' durations in 2017 are still on average longer than Asian and white drivers' durations in 2012, indicating that whatever racial gap is evident here has yet to be closed.
 
-```{r echo=FALSE, fig.height=8, fig.width=10}
+Hispanic folks are stopped the most on average, but let's view a boxplot to account for extremes.
+
+```{r echo=FALSE, fig.height=4, fig.width=5}
 duration_join %>%
   filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
          !is.na(duration_of_stop)) %>%
   ggplot(aes(x = race_description, y = duration_of_stop)) +
   geom_boxplot() +
   facet_wrap(~year)
-
 ```
 
-```{r echo=FALSE, fig.height=8, fig.width=10}
+```{r echo=FALSE, fig.height=4, fig.width=5}
 accidents <- accidents %>%
   mutate(year = year(Date)) %>%
   filter(!is.na(Age))
@@ -433,14 +448,78 @@ accidents %>%
   unique()
 ```
 
-# Things I want to do:
 
-* Interaction plots and parallel slopes models for variables such as:
-    + stops & resultant arrest %s
-    + duration & demographic variables
-    + % more serious than traffic violations out of all stopped
-    + Impact of location (?) and time of day on the stop
-    + Interaction on time of day
+```{r stops_and_accidents, echo=FALSE, message=FALSE}
+
+# After running quantile(accidents$Age), I've determined the following age
+# groups: 0-24, 25-35, 36-52, and 53-99 that each represent a quantile and am
+# transforming the accidents dataset as appropriate
+
+accidents_yearly <- accidents %>%
+  filter(Race %in% c("W", "H", "A", "B")) %>%
+  mutate(Age = case_when(Age <= 24 ~ 1,
+                         Age > 24 & Age <= 35 ~ 2,
+                         Age > 35 & Age <= 52 ~ 3,
+                         Age > 51 ~ 4),
+         Race = case_when(Race == "W" ~ "WHITE",
+                          Race == "H" ~ "HISPANIC",
+                          Race == "A" ~ "ASIAN",
+                          Race == "B" ~ "BLACK")) %>%
+  group_by(year, Age, Race) %>%
+  mutate(accidents_per_year = n()) %>% 
+  ungroup() %>%
+  select(year, accidents_per_year, Race, Age) %>%
+  unique()
+
+# Also make sure the factor levels in tstops_demo is the same as accidents so
+# they can be joined
+
+stops_yearly <- tstops_demo %>%
+  filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
+         !is.na(age_at_contact),
+         year >= 2014 & year <= 2019) %>%
+  mutate(Age = case_when(age_at_contact <= 24 ~ 1,
+                         age_at_contact > 24 & age_at_contact <= 35 ~ 2,
+                         age_at_contact > 35 & age_at_contact <= 52 ~ 3,
+                         age_at_contact > 51 ~ 4),
+         Race = race_description) %>%
+  group_by(year, Age, Race) %>%
+  mutate(stops_per_year = n()) %>%
+  ungroup() %>%
+  select(year, stops_per_year, Race, Age) %>%
+  unique()
+
+# Join accidents and traffic stops data
+stopsxaccidents <- left_join(stops_yearly, accidents_yearly, by = c("year", "Race", "Age"))
+
+# General plot
+ggplot(data = stopsxaccidents, mapping = aes(y = stops_per_year, x = accidents_per_year, color=Race)) +
+  geom_point() +
+  labs(title = "Stops per year")
+
+stopsxaccidents %>%
+  mutate(Race = fct_relevel(Race, c("WHITE", "ASIAN", "HISPANIC", "BLACK"))) %>%
+  mutate(sa_ratio = stops_per_year / accidents_per_year) %>%
+  ggplot(aes(x= year, y = sa_ratio, fill = Race)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~Age) +
+  theme_minimal() +
+  labs(title = "Ratio of Stops and Accidents",
+       subtitle = "By age group and year")
+
+stan_glm(formula = stops_per_year ~ Race + Age + year, data = stopsxaccidents, refresh=0)
+  
+
+
+```
+
+
+
+# Notes from 9/4 meeting
+- bar graphs
+- accidents vs stops for race and age - putting age into buckets (like 16-24)
+- pages on methodology
+
     
 # Questions
 
