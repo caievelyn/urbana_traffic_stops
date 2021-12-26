@@ -1,11 +1,15 @@
 ---
 title: "Civitas: Traffic Stops and Racial Disparities in Urbana, IL"
 author: "Evelyn Cai"
-output: pdf_document
+output: 
+  pdf_document:
+    extra_dependencies: ["float"]
+    toc: false
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(fig.align = 'center')
 # Load libraries
 library(tidyverse)
 library(janitor)
@@ -16,58 +20,34 @@ library(readxl)
 library(patchwork)
 library(ggridges)
 library(rstanarm)
+library(gt)
 
 # Read in data and clean names/columns
 df <- read_csv("urbana_traffic_stops.csv",
                col_types= cols(
                  `AGE AT CONTACT` = col_character())) %>%
   clean_names() %>%
+  # Change date_of_contact to data type "date" and recode "NN"s to be "NA"s
   mutate(date_of_contact = mdy(date_of_contact),
-         age_at_contact = case_when(age_at_contact == "NN" ~ NA_character_,
-                                    TRUE ~ age_at_contact),
+         age_at_contact = case_when(
+           age_at_contact == "NN" ~ NA_character_,
+           TRUE ~ age_at_contact),
          age_at_contact = as.numeric(age_at_contact))
 
 # Read in duration CSV
 durations <- read_xlsx("Stop Duration thru 2017.xlsx") %>%
   clean_names()
 
-# Read in accident data
+# Read in accidents CSV
 accidents <- read_xlsx("Drivers in Accidents - Benchmarks.xlsx")
 ```
 
-```{r ages_deprecated, eval=FALSE, echo=FALSE}
-# Below, I explored the differences in the two datasets, since joining seems to yield some extra data points. It seems there are 130 incident numbers in `ages` that is not in `df` and 1558 incident numbers in `df` that is not in `ages`. Therefore, I will choose to ignore the age piece right now.
-# only_ins <- df %>% select(incident_number) %>% unique()
-# only_age_ins <- ages %>% select(incident_number) %>% unique()
-# anti_join(only_age_ins, only_ins)
-
-# Read in additional ages
-ages <- read_xlsx("Additional IDOT info.xlsx") %>%
-  clean_names() %>%
-  rename("incident_number" = "incident") %>%
-  select(incident_number, age_at_contact) %>%
-  unique()
-
-# Join for ages
-tstops <- left_join(df, ages, by = "incident_number") %>%
-  rename("age_at_contact" = "age_at_contact.y") %>%
-  mutate(age_at_contact = case_when(is.na(age_at_contact.x) ~ age_at_contact,
-                                    TRUE ~ age_at_contact.x)) %>%
-  select(-age_at_contact.x)
-
-
-# Below, I explored the differences in the two datasets, since joining seems to yield some extra data points. It seems there are 130 incident numbers in `ages` that is not in `df` and 1558 incident numbers in `df` that is not in `ages`. Therefore, I will choose to ignore the age piece right now.
-
- only_ins <- df %>% select(incident_number) %>% unique()
- only_age_ins <- ages %>% select(incident_number) %>% unique()
- anti_join(only_age_ins, only_ins)
-
-```
-
 ```{r cleaning_df, echo=FALSE}
+# Clean up columns
 tstops <- df %>%
   group_by(incident_number) %>%
-  # Create new variables that collapse multiple offenses into one column
+  # Create new variables that collapse multiple offenses into one column for
+  # ease of data exploration
   mutate(crime_descs  = paste(crime_description, collapse =", "),
          crime_codes = paste(crime_code, collapse = ", "),
          crime_status_descs = paste(crime_status_description, collapse = ", "),
@@ -75,15 +55,14 @@ tstops <- df %>%
          crime_category_descs = paste(crime_category_description, collapse = ", "),
          # Create new variable to count the number of offenses
          number_of_crimes = length(crime_codes)) %>%
-  # ungroup
   ungroup() %>%
   # Deselect duplicate columns
   select(-crime_code, -crime_description, -crime_status_description, -crime_category, -crime_category_description) %>%
   # Filter for unique incidents
   unique()
 
-## Create a new dataset that contains demographic information
-
+## Create a new dataset by reassigning 'tstops' that contains only relevant
+## demographic information
 tstops_demo <- tstops %>%
   # Select only for useful demographic and logistical information
   select(date_of_contact, time_of_contact, incident_number,
@@ -98,13 +77,15 @@ tstops_demo <- tstops %>%
            race_description == "CAUCASIAN" ~ "WHITE",
            race_description == "AFRICAN AMERICAN" ~ "BLACK",
            TRUE ~ race_description))) %>%
+  # Filter out 2020 due to incomplete data collection
   filter(year != 2020)
 ```
 
-## Disparity Ratios
-According to the Indiana Department of Transportation 2018 annual report, disparity ratios are useful metrics for calculating the number of traffic stops that exceed the number of expected stops predicted from the population distribution.^[Insert citation here] Below, find the disparity ratio calculations by racial group for 2012-2020. 
+## Analysis
+According to the Illinois Department of Transportation 2018 annual report, disparity ratios are useful metrics for calculating the number of traffic stops that exceed the number of expected stops predicted from the population distribution.^[Report was provided by Melissa Hendrian.] The disparity ratios below were calculated using the table of Urbana's driving population on page 9 of the Urbana Police Department's 2018 Annual Traffic Report.^[https://www.urbanaillinois.us/sites/default/files/attachments/2018_IDOT_Traffic_Presentation.pdf] This graph serves as a reference for the two following graphics and is a replication of the Urbana Police Department's Crime Analysis graphics. Please note that 2020 was excluded due to incomplete data collection.
 
-```{r disparity-ratios, fig.height=3, fig.width=8, fig.cap="Disparity ratios by race by year"}
+```{r disparity-ratios, fig.height=2.5, fig.width=10, fig.cap="Disparity ratios by race by year"}
+# Calculate disparity ratios by race (replication of existing plot)
 disparity_ratios <- tstops_demo %>%
   filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN")) %>%
   group_by(year) %>%
@@ -166,15 +147,14 @@ disparity_ratios %>%
   theme_minimal() +
   labs(title = "Disparity Ratios",
        caption = "Data Publicly Available from Urbana Police Department") +
-  scale_color_brewer(palette = "Dark2") +
-  xlab("Year") +
+  scale_fill_manual(name = "Race") +
+  scale_color_brewer(palette = "Dark2", name = "Race") +
+  xlab(NULL) +
   ylab("Disparity Ratio") +
   geom_hline(yintercept = 1, color = "grey")
 ```
 
-Accounting for the interaction between gender and race, we get:
-
-```{r message=FALSE, fig.height=4.5, fig.width=8, fig.cap="Disparity ratios by gender and race by year"}
+```{r echo=FALSE, fig.height=3.5, fig.width=8, fig.cap="Disparity ratios by gender and race by year"}
 # Graph disparity ratios by gender
 disparity_ratios %>%
   ggplot(aes(year, disparity_ratio_gender, color = sex_description)) +
@@ -184,98 +164,59 @@ disparity_ratios %>%
   theme_minimal() +
   labs(title = "Disparity Ratios by Gender",
        caption = "Data Publicly Available from Urbana Police Department") +
+  scale_color_discrete(name = "Gender") +
   geom_hline(yintercept = 0.5, color = "grey") +
-  facet_wrap(~race_description)
-
-## To do gender*race disparity ratios: We'd need to either 1. Account for the different frequencies in male vs females being stopped, or 2. Find out the average # males and females stopped in Urbana to use as a "checkpoint" or baseline. The above chart displays disparity ratios by gender, which assumes that there are an equal number of men and women driving on the streets.
+  facet_wrap(~race_description) +
+  xlab(NULL) +
+  ylab("Disparity Ratio")
 ```
 
-## Age Distributions
+Note that the baseline assumption is that one would not expect any differences in the rates of getting stopped for women and men. As such, any disparity ratio that strays away from the assumed baseline of 0.5 is potentially interesting to explore further. Most notably, the white disparity ratio is below 0.5 for Male and Female, whereas in the Asian and Hispanic groups, men are typically stopped at higher rates than their population proportion would predict than women. Recent trends indicate a gap between men and women for Asian, Hispanic, and Black stopped drivers. Asian and Hispanic women seem to be stopped less frequently than their population proportion would predict, whereas Black women are still stopped at higher rates than their population proportion would predict. This disaggregated difference btween racial groups indicates that patterns involving Black drivers may differ from those involving Hispanic or Asian drivers.
 
-```{r age, fig.height=8, fig.width=10, message=FALSE, warning=FALSE, fig.cap="Age distributions of stopped drivers by race"}
-# Age distribution of drivers in 2018, 2019, and 2020
-
+```{r age, fig.height=5, fig.width=10, message=FALSE, warning=FALSE, fig.cap="Age distributions of stopped drivers by race"}
 tstops_demo %>%
+  # Filter out American Indian/Alaskan for small sample size
   filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
-         !is.na(age_at_contact)) %>%
+         # Filter out for those cases with unknown ages of stopped drivers
+         !is.na(age_at_contact),
+         !year %in% c(2012, 2013)) %>%
   ggplot(aes(x = age_at_contact, y = race_description)) +
+  # Plot densities
   geom_density_ridges(show.legend = FALSE) +
   facet_wrap(~year) +
   labs(title = "Age Distribution of Drivers by Race",
+       subtitle = "Mean age is about 35 years old",
        caption = "Data Publicly Available from the Urbana Police Department",
        xlab = "Age at Contact") +
-  ylab(NULL)
+  ylab(NULL) +
+  theme_minimal()
 ```
 
-```{r echo=FALSE, fig.height=4, fig.width=5, fig.cap="Age distribution of drivers in accidents"}
+
+```{r message=FALSE, echo=FALSE, fig.height=5, fig.width=10, fig.cap="Age distribution of drivers in accidents"}
 accidents <- accidents %>%
   mutate(year = year(Date)) %>%
-  filter(!is.na(Age))
+  filter(Race %in% c("W", "H", "A", "B"),
+       !is.na(Age),
+       year != 2013)
 
-# Plot of age distribution
-vertical <- accidents %>%
-  filter(Race %in% c("W", "H", "A", "B")) %>%
-  summarize(vertical = mean(Age))
-
-vertical <- as.numeric(vertical)
-
-accidents %>%
-  filter(Race %in% c("W", "H", "A", "B")) %>%
-  ggplot(aes(x = Age, y = Race)) +
+ggplot(data=accidents, aes(x = Age, y = Race)) +
   geom_density_ridges(show.legend = FALSE) +
   scale_y_discrete(labels = rev(c("White", "Hispanic", "Black", "Asian"))) +
   scale_x_continuous(breaks = seq(0, 100, by = 10)) +
-  geom_vline(xintercept = vertical) +
   labs(title = "Age Distribution of Drivers Involved in Accidents",
-       subtitle = "Mean age is about 39 years old")
-
-# Plotting age distribution by at fault
-accidents %>%
-  filter(Race %in% c("W", "H", "A", "B")) %>%
-  ggplot(aes(x = Age, y = Race)) +
-  geom_density_ridges(show.legend = FALSE) +
-  facet_wrap(~`At Fault`) +
-  scale_y_discrete(labels = rev(c("White", "Hispanic", "Black", "Asian"))) +
-  scale_x_continuous(breaks = seq(0, 100, by = 10)) +
-  labs(title = "Age Distribution of Drivers Involved in Accidents",
-       subtitle = "Faceted by whether the driver was at fault or not")
-```
-
-## Duration of Stops by Race
-
-```{r duration, echo=FALSE, fig.height=4, fig.width=5}
-
-# Join duration data with tstop demographic information
-duration_join <- left_join(tstops_demo, durations, by = "incident_number") %>%
-  filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
-         !is.na(duration_of_stop)) %>%
-  group_by(year, race_description) %>%
-  mutate(avg_duration = mean(duration_of_stop)) %>%
-  ungroup() %>%
-  mutate(race_description = fct_relevel(race_description, c("WHITE", "ASIAN", "BLACK", "HISPANIC")))
-
-# Create barplot
-duration_by_year <- duration_join %>%
-  ggplot(aes(x = year, y = avg_duration ,fill = race_description)) +
-  geom_bar(stat = "identity", position = "dodge") +
-  labs(fill = "Race",
-       title = "Average Duration of Stops by Race",
-       subtitle = "Urbana, IL 2012-2017",
-       caption = "Data Publicly Available from Urbana Police Department") +
+       subtitle = "Mean age is about 39 years old") +
   theme_minimal() +
-  theme(legend.position = "bottom") +
-  scale_fill_brewer(palette = "PRGn") +
-  xlab(NULL) +
-  ylab("Duration in minutes")
-
-duration_by_year
+  facet_wrap(~year)
 ```
 
-```{r stops_and_accidents, echo=FALSE, message=FALSE}
+In figure 4, it is interesting that the average age for all stopped drivers hovers around 35-36 years of age year to year. In contrast, the average age for drivers involved in accidents is around 38-39 years of age year to year. This is contrary to expectations, as one might think that younger drivers may be more reckless or less experienced.
+
+```{r include=FALSE}
 
 # After running quantile(accidents$Age), I've determined the following age
 # groups: 0-24, 25-35, 36-52, and 53-99 that each represent a quantile and am
-# transforming the accidents dataset as appropriate
+# transforming the accidents data set as appropriate.
 
 accidents_yearly <- accidents %>%
   filter(Race %in% c("W", "H", "A", "B")) %>%
@@ -295,7 +236,6 @@ accidents_yearly <- accidents %>%
 
 # Also make sure the factor levels in tstops_demo is the same as accidents so
 # they can be joined
-
 stops_yearly <- tstops_demo %>%
   filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
          !is.na(age_at_contact),
@@ -313,24 +253,29 @@ stops_yearly <- tstops_demo %>%
 
 # Join accidents and traffic stops data
 stopsxaccidents <- left_join(stops_yearly, accidents_yearly, by = c("year", "Race", "Age"))
+```
 
-# General plot
-ggplot(data = stopsxaccidents, mapping = aes(y = stops_per_year, x = accidents_per_year, color=Race)) +
-  geom_point() +
-  labs(title = "Stops per year")
+```{r echo=FALSE, fig.width = 10, fig.height = 5, fig.cap = "Stops-to-accidents ratio by year and race"}
+# Create new facet labels
+age.labs <- c("0-24", "25-35", "36-52", "53+")
+names(age.labs) <- c("1", "2", "3", "4")
 
 stopsxaccidents %>%
   mutate(Race = fct_relevel(Race, c("WHITE", "ASIAN", "HISPANIC", "BLACK"))) %>%
   mutate(sa_ratio = stops_per_year / accidents_per_year) %>%
   ggplot(aes(x= year, y = sa_ratio, fill = Race)) +
   geom_bar(stat = "identity", position = "dodge") +
-  facet_wrap(~Age) +
+  facet_wrap(~Age, labeller = labeller(Age = age.labs)) +
   theme_minimal() +
+  scale_fill_brewer(palette = "Dark2") +
   labs(title = "Ratio of Stops and Accidents",
-       subtitle = "By age group and year")
+       subtitle = "Each age range represents 25% of the age distribution") +
+  xlab(NULL) +
+  ylab("Ratio of stops to accidents") +
+  scale_x_continuous(breaks = seq(2014, 2019, by = 1))
 ```
 
-```{r echo=FALSE, fig.height=6, fig.width=8}
+```{r echo=FALSE, fig.height=5, fig.width=10, fig.cap = "Stop outcomes by race"}
 # Create dataframe of outcome of traffic stops
 outcomes <- tstops_demo %>% 
   select(race_description, sex_description, age_at_contact, incident_number, year) %>%
@@ -351,15 +296,22 @@ outcomes %>%
   select(race_description, year, outcome, prop_outcome) %>%
   ggplot(aes(x = year, y = prop_outcome, color=outcome)) +
   geom_line() +
+  theme_minimal() +
   facet_wrap(~race_description) +
   theme(legend.position = "bottom") +
+  scale_color_brewer(palette = "Dark2", name = "Stop Outcome") +
   xlab(NULL) +
   ylab("Proportion of outcome out of all outcomes") +
   labs(title = "Traffic Stop Outcomes by Race",
-       subtitle = "Proportions of tickets, warnings, and more serious outcomes by race")
+       subtitle = "Proportions of tickets, warnings, and more serious outcomes by race") +
+  scale_x_continuous(breaks = seq(2012, 2019, by = 1))
 ```
 
-```{r echo=FALSE, fig.height = 8, fig.width = 8}
+
+For figures 5 and 6, It seems that traffic tickets are the most common outcome for all racial groups in most years. In 2019, less severe warnings were actually given more frequently to stopped drivers who were Black than traffic tickets. This empirical change can be traced back to policy changes made in 2018 that removed some officer subjectivity. For example, officers were assigned to areas in which there are a high concentration of accidents, rather than choosing their location of patrol themselves. Additionally, the city provided discount vouchers that allowed headlights/taillights to be fixed by an auto shop. In order to receive the voucher, folks were let off with a warning. Because African-Americans are more likely to be stopped for equipment violations, this is also a likely explanation of the data above.
+
+
+```{r echo=FALSE, fig.height = 8, fig.width = 10, fig.cap = "Stop outcomes by race and gender"}
 # Analyze outcomes by race
 outcomes %>%
   group_by(year, race_description) %>%
@@ -372,24 +324,185 @@ outcomes %>%
   select(race_description, sex_description, year, outcome, prop_outcome) %>%
   ggplot(aes(x = year, y = prop_outcome, color=outcome, linetype = sex_description)) +
   geom_line() +
+  theme_minimal() +
+  scale_color_brewer(name = "Stop outcome", palette = "Dark2") +
   facet_grid(rows=vars(race_description)) +
   theme(legend.position = "bottom") +
   xlab(NULL) +
   ylab("Proportion of outcome out of all outcomes") +
   labs(title = "Traffic Stop Outcomes by Race",
-       subtitle = "Proportions of tickets, warnings, and more serious outcomes by race and gender")
+       subtitle = "Proportions of tickets, warnings, and more serious outcomes by race and gender") +
+  scale_x_continuous(breaks = seq(2012, 2019, by = 1))
+```
+
+More serious outcomes are virtually nonexistent for Asian and white drivers, but not insignificant for Hispanic and Black drivers. 
+
+What about the likelihood of receiving a warning vs. a traffic ticket based on race? Here we exclude more serious offenses, which are often taken out of the officer's hands. Instead, we include only cases in which officers make the sole judgement calls.
+
+```{r echo=FALSE, fig.height=5, fig.width=10, fig.cap = "Proportion of warnings out of all less serious outcomes"}
+outcomes %>%
+  group_by(year, race_description) %>%
+  mutate(all = n(),
+         t = sum(outcome == "Traffic Ticket"),
+         t_prop = t/all) %>%
+  select(year, race_description, t_prop) %>%
+  ggplot(aes(x=year, y=t_prop, color=race_description)) +
+  geom_line() +
+  labs(title = "Proportion of Tickets out of all Less Serious Outcomes",
+       subtitle = "Where less serious outcomes are defined as traffic tickets and warnings") +
+  scale_x_continuous(breaks = seq(2012, 2019, by = 1)) +
+  theme_minimal() +
+  xlab(NULL) +
+  ylab("Proportion of tickets out of less serious outcomes") +
+  scale_color_brewer(palette = "Dark2", name = "Race") +
+  theme(legend.position = "bottom",
+        panel.grid.minor.x = element_blank())
 ```
 
 
-Discuss: vertical vs horizontal variation for scatterplots and what that means; younger folks and ratios of being stopped vs being in accidents compared to the general trends of the age of drivers involved in stops; disparity ratios across gender/race and other factors (time of day?)
+The results are optimistic. Since 2017, the proportion of Black drivers who received a traffic ticket out of all less serious outcomes has decreased to a little over 0.4, compared to about 0.53 for white drivers. Additionally, the proportion of Hispanic drivers who received traffic tickets instead of warnings, which was the group with the highest rates from 2013 to 2018, also saw a decrease from 0.62 to 0.47. Generally, all racial groups are receiving less traffic tickets proportional to the number of warnings. What about the proportion of traffic tickets by race?
 
-## Methodology
+
+```{r echo=FALSE, fig.height=5, fig.width=10, fig.cap = "Proportion of warnings out of all less serious outcomes"}
+p <- outcomes %>%
+  filter(outcome == "Traffic Ticket") %>%
+  group_by(year, outcome) %>%
+  mutate(all = n(),
+         w = sum(race_description == "WHITE"),
+         b = sum(race_description == "BLACK"),
+         h = sum(race_description == "HISPANIC"),
+         a = sum(race_description == "ASIAN"),
+         w_prop = w/all,
+         b_prop = b/all,
+         h_prop = h/all,
+         a_prop = a/all) %>%
+  ungroup() %>%
+  select(race_description, year, outcome, w_prop, b_prop, h_prop, a_prop) %>%
+  unique() %>%
+  pivot_longer(names_to = "race", cols = c(w_prop, b_prop, h_prop, a_prop)) %>%
+  ggplot(aes(x=year, y=value, color=race)) +
+  geom_line(size=1.2)
+
+# Create dataframes with proportions of each race in the larger driving population
+w_pop <- data.frame("year" = seq(2012, 2019, by = 1), "value" = c(.6726, .6726, .6726, .6726, .6554, .637, .6223, .6223), race = "w_prop")
+b_pop <- data.frame("year" = seq(2012, 2019, by = 1), "value" = c(.1807, .1807, .1807, .1807, .1856, .2036, .2226, .2226), race = "b_prop")
+h_pop <- data.frame("year" = seq(2012, 2019, by = 1), "value" = c(.0352, .0352, .0352, .0352, .0404, .044, .0484, .0484), race = "h_prop")
+a_pop <- data.frame("year" = seq(2012, 2019, by = 1), "value" = c(.0996, .0996, .0996, .0996, .0991, .0907, .0837, .0837), race = "a_prop")
+
+p +
+  geom_line(data=w_pop, aes(x=year, y=value), alpha = 0.5) +
+  geom_line(data=b_pop, aes(x=year, y=value), alpha = 0.5) +
+  geom_line(data=h_pop, aes(x=year, y=value), alpha = 0.5) +
+  geom_line(data=a_pop, aes(x=year, y=value), alpha = 0.5) +
+  scale_x_continuous(breaks = seq(2012, 2019, by = 1)) +
+  theme_minimal() +
+  xlab(NULL) +
+  ylab("Proportion") +
+  scale_color_brewer(palette = "Dark2",
+                     name = "Race",
+                     breaks = c("a_prop", "b_prop", "h_prop", "w_prop"),
+                     labels = c("Asian", "Black", "Hispanic", "White")) +
+  labs(title = "Breakdown of traffic tickets issued per year by race",
+       subtitle = "Bold line represent actual rate; transparent line represents the proportion of each racial group within the driving population")
+```
+
+While policies instituted in 2018 seem to have decreased the number of traffic tickets issued to African-Americans proportional to all less serious outcomes, as you can see from the graph above, there are still racial disparities in the number of tickets issued. White folks make up 62% of the 2019 driving population, but receive less than 60% of tickets. Meanwhile, Black folks make up 22% of the 2019 driving population, but receive 28% of traffic tickets. Recent policies have had positive effects on traffic outcomes for drivers of color, but there is still more to be done with removing unconscious biases to make racial disparities in traffic stops obsolete.
 
 ## Appendix 
 
-## References
+```{r age-calculations, echo=FALSE, fig.height=4, fig.width=10, fig.align = 'center'}
+tstops_demo %>%
+  filter(!is.na(age_at_contact),
+         !year %in% c(2012, 2013)) %>%
+  group_by(year) %>%
+  mutate(avg_age = mean(age_at_contact)) %>%
+  select(avg_age, year) %>%
+  unique()
 
-## Take out 2020, take out ugly line graph of age
-- UT: traffic ticket/citation
-- UW: warning - warning ticket
-- UU: more serious than a warning (DUI, warrant, etc) - a report had to be written for it.
+accidents %>%
+  group_by(year) %>%
+  mutate(avg_age = mean(Age)) %>%
+  select(avg_age, year) %>%
+  unique()
+```
+
+```{r duration, echo=FALSE, fig.height=4, fig.width=10, fig.cap = "Average duration of traffic stop by race"}
+# Join duration data with tstop demographic information
+duration_join <- left_join(tstops_demo, durations, by = "incident_number") %>%
+  filter(!race_description %in% c("AMERICAN INDIAN/ALASKAN", "UNKNOWN"),
+         !is.na(duration_of_stop)) %>%
+  group_by(year, race_description) %>%
+  mutate(avg_duration = mean(duration_of_stop)) %>%
+  ungroup() %>%
+  mutate(race_description = fct_relevel(race_description, c("WHITE", "ASIAN", "BLACK", "HISPANIC")))
+
+# Create barplot
+duration_by_year <- duration_join %>%
+  ggplot(aes(x = year, y = avg_duration ,fill = race_description)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(fill = "Race",
+       title = "Average Duration of Stops by Race",
+       subtitle = "Urbana, IL 2012-2017",
+       caption = "Data Publicly Available from Urbana Police Department") +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  scale_fill_brewer(palette = "Dark2") +
+  scale_x_continuous(breaks = seq(2012, 2017, by = 1)) +
+  xlab(NULL) +
+  ylab("Duration in minutes")
+
+duration_by_year
+```
+
+```{r echo=FALSE, fig.height=5, fig.width=10}
+outcomes %>%
+  filter(outcome == "Traffic Ticket") %>%
+  group_by(year, outcome) %>%
+  mutate(all = n()) %>%
+  group_by(year, outcome, race_description, sex_description) %>%
+  mutate(count = n(),
+         prop = count / all) %>%
+  ungroup() %>%
+  select(race_description, year, outcome, sex_description, prop) %>%
+  unique() %>%
+  ggplot(aes(x=year, y=prop, color=race_description, linetype = sex_description)) +
+  geom_line(size=1) +
+  theme_minimal() +
+  xlab(NULL) +
+  ylab("Proportion") +
+  scale_color_brewer(palette = "Dark2",
+                     name = "Race") +
+  scale_linetype_discrete(name = "Gender") +
+  labs(title = "Breakdown of traffic tickets issued per year by race and gender") +
+  scale_x_continuous(breaks = seq(2012, 2019, 1))
+
+
+outcomes %>%
+  filter(outcome == "Traffic Ticket",
+         !is.na(age_at_contact)) %>%
+  rename("age" = "age_at_contact") %>%
+  mutate(age = case_when(age >= 0 & age <= 24 ~ "0-24",
+                         age > 24 & age <= 35 ~ "25-35",
+                         age > 35 & age <= 52 ~ "36-52",
+                         age > 53 ~ "53+")) %>%
+  group_by(year, outcome) %>%
+  mutate(all = n()) %>%
+  group_by(year, outcome, race_description, age) %>%
+  mutate(count = n(),
+         prop = count / all) %>%
+  ungroup() %>%
+  select(race_description, year, outcome, age, prop) %>%
+  unique() %>%
+  drop_na() %>%
+  ggplot(aes(x=year, y=prop, color=age)) +
+  geom_line() +
+  facet_wrap(~race_description) +
+  theme_minimal() +
+  xlab(NULL) +
+  ylab("Proportion") +
+  scale_color_brewer(palette = "Dark2",
+                     name = "Age") +
+  labs(title = "Breakdown of traffic tickets issued per year by race and age") +
+  scale_x_continuous(breaks = seq(2012, 2019, 1))
+```
+
